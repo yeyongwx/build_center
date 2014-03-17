@@ -1,0 +1,213 @@
+<project name="server_deployment" default="run" basedir=".">
+	<description>
+         sshexec
+     </description>
+	<property file="./rokybuild.ueweb.properties" />
+	<property name="sleep.time" value="120" />
+
+	<target name="init">
+		<echo message="Build file for rokyinfo projects." />
+	</target>
+
+	<target name="remote-tomcat-start" depends="init">
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" command="${tomcat.home}/bin/startup.sh" trust="true" />
+	</target>
+
+
+	<target name="remote-tomcat-stop">
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" command="${tomcat.home}/bin/shutdown.sh" trust="true" />
+		<sleep seconds="${sleep.time}" />
+	</target>
+
+	<!--high risk action: rm -rf -->
+	<target name="remote_server_clean">
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" command="rm -rf ${remote.ant.home}/*" trust="true" />
+	</target>
+
+
+	<tstamp>
+		<format property="time.stamp" pattern="yyyy_MM_dd_hh_mm_ss" />
+	</tstamp>
+
+	<property name="bak.dir" value="${remote.ant.home}/../bak/${time.stamp}" />
+
+
+
+	<target name="bak_old_file">
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" command="mkdir ${bak.dir};cp -R ${remote.dir} ${bak.dir}" trust="true" />
+	</target>
+
+
+	<target name="copy_file_to_server">
+		<scp todir="${ssh.userid}:${ssh.password}@${ssh.server}:${remote.ant.home}" trust="true" verbose="true">
+			<fileset dir="${localant.home}">
+			</fileset>
+		</scp>
+	</target>
+
+
+
+	<target name="runtcpserver">
+		<antcall target="upload_file_to_server" />
+		<antcall target="run_remote_script" />
+		<antcall target="check_tcpserver_online" />
+	</target>
+
+	<target name="upload_file_to_server">
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" trust="true" command="source /etc/profile &amp;&amp; rm -rf ${remote.dir} &amp;&amp; mkdir -p ${remote.dir}" />
+
+		<scp todir="${ssh.userid}:${ssh.password}@${ssh.server}:${remote.dir}" trust="true">
+			<fileset dir="${local.dir}">
+			</fileset>
+		</scp>
+	</target>
+
+	<target name="run_remote_script">
+		<!--there is a risk here: we need to clean the backup files on server for saving disk sapce -->
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" trust="true" command="source /etc/profile &amp;&amp; cd /app/tcpServer/upload/ &amp;&amp; chmod 777 ./run1.sh &amp;&amp; sh ./run1.sh" />
+	</target>
+
+	<target name="clean_ping">
+		<delete verbose="true">
+			<fileset dir="./status" includes="*.txt" />
+		</delete>
+	</target>
+
+	<target name="ping_tcp_server" depends="clean_ping">
+		<sleep seconds="15" />
+		<echo message="python ${ant.build.home}/checktcp.py ${ssh.server} ${tcp.port}" />
+		<exec command="python ${ant.build.home}/checktcp.py ${ssh.server} ${tcp.port}" />
+		<available property="server.online" file="status/tcpserveron.txt">
+		</available>
+		<antcall target="tcp.server.online" />
+		<antcall target="tcp.server.offline" />
+	</target>
+
+	<target name="tcp.server.online" if="${server.online}">
+		<echo message="TcpServer ${ssh.server}:${tcp.port} is online." />
+	</target>
+
+	<target name="tcp.server.offline" unless="${server.online}">
+		<echo message="TcpServer ${ssh.server}:${tcp.port} is offline." />
+		<antcall target="notify.admin">
+		</antcall>
+	</target>
+
+	<target name="notify.admin">
+		<echo message="Notifying user the server is offline." />
+		<fail message="Warning: server is not back to work." />
+	</target>
+	<property name="sleep.time" value="120" />
+
+
+	<target name="upload_file_to_tomcat">
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" trust="true" command="source /etc/profile &amp;&amp; rm -rf ${tomcat.remote.dir} &amp;&amp; mkdir -p ${tomcat.remote.dir}" />
+
+		<scp todir="${ssh.userid}:${ssh.password}@${tomcat.server}:${tomcat.remote.dir}" trust="true" verbose="true">
+			<fileset dir="${tomcat.local.dir}">
+			</fileset>
+		</scp>
+	</target>
+
+	<target name="run_remote_script_on_tomcat">
+		<!--there is a risk here: we need to clean the backup files on server for saving disk sapce -->
+
+		<sshexec host="${ssh.server}" username="${ssh.userid}" password="${ssh.password}" trust="true" command="source /etc/profile &amp;&amp; cd /app/upload/ &amp;&amp; chmod 777 ./run1.sh &amp;&amp; sh ./run1.sh" />
+	</target>
+
+	<target name="ping_tomcat_server" depends="clean_ping">
+		<sleep seconds="15" />
+		<echo message="python ${ant.build.home}/checktomcat.py ${tomcat.server} ${tomcat.port}" />
+		<exec command="python ${ant.build.home}/checktomcat.py ${tomcat.server} ${tomcat.port}" />
+		<available property="tomcat.online" file="status/tomcaton.txt">
+		</available>
+		<antcall target="tomcat.server.online" />
+		<antcall target="tomcat.server.offline" />
+	</target>
+
+	<target name="tomcat.server.online" if="${tomcat.online}">
+		<echo message="Tomcat server ${tomcat.server}:${tomcat.port} is online." />
+	</target>
+
+	<target name="tomcat.server.offline" unless="${tomcat.online}">
+		<echo message="Tomcat server ${tomcat.server}:${tomcat.port} is offline." />
+		<antcall target="notify.admin">
+		</antcall>
+	</target>
+
+
+	<target name="run">
+		<antcall target="run_tcpserver">
+		</antcall>
+		<antcall target="run_tomcat">
+		</antcall>
+	</target>
+
+
+	<target name="get_tcpserver_build_file">
+		<delete verbose="true">
+			<fileset dir="${local.dir}" includes="*.jar" />
+		</delete>
+		<copy verbose="true" tofile="${local.dir}/UETcpServer.jar">
+			<fileset dir="${m2.repo.tcpserver}" includes="UETcpServer*.jar" />
+		</copy>
+	</target>
+
+	<target name="get_webapp_build_file">
+		<delete verbose="true">
+			<fileset dir="${tomcat.local.dir}" includes="*.war" />
+		</delete>
+		<copy verbose="true" tofile="${tomcat.local.dir}/UEWeb.war">
+			<fileset dir="${m2.repo.ueweb}" includes="*.war" />
+		</copy>
+	</target>
+
+
+	<target name="run_tcpserver">
+		<antcall target="get_tcpserver_build_file" />
+		<antcall target="upload_file_to_server" />
+		<antcall target="run_remote_script" />
+		<antcall target="ping_tcp_server" />
+	</target>
+
+	<target name="run_tomcat">
+		<antcall target="get_webapp_build_file" />
+		<antcall target="upload_file_to_tomcat">
+		</antcall>
+		<antcall target="run_remote_script_on_tomcat" />
+		<antcall target="ping_tomcat_server" />
+	</target>
+
+	<target name="run_tomcat_uemanage">
+		<antcall target="get_webapp_build_file" />
+		<antcall target="upload_file_to_tomcat">
+		</antcall>
+		<antcall target="run_remote_script_on_tomcat" />
+		<antcall target="ping_tomcat_server" />
+	</target>
+	
+	
+	
+	
+	<target name="change_property">
+		<!-- copy modified property files to replace original one
+		     then package the webapp
+		-->
+		
+		<copy verbose="true" todir="${svn.ueweb.src.home}/src/main/resources/" overwrite="true">
+			<fileset dir="${ant.build.home}/resources">
+				<include name="*.properties"/>
+			</fileset>
+		</copy>
+	</target>
+	
+
+	<target name="check_ueweb">
+		<antcall target="common_check_process">
+			<property name="target" location="location"/>
+
+		</antcall>
+
+	</target>
+	
+</project>
